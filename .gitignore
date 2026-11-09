@@ -1,0 +1,15 @@
+# Run output: workspaces, per-run CA keys, canary values, audit logs
+.sentinel/
+
+# Secrets that must never be committed
+.env
+.env.*
+*.pem
+*.key
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/

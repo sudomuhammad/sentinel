@@ -1,0 +1,39 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked
+      - run: make lint test
+
+  red-team:
+    needs: test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked
+      - run: make build
+      - name: Run every attack with and without Sentinel
+        run: uv run sentinel eval --report results.md
+      - name: Publish results
+        if: always()
+        run: cat results.md >> "$GITHUB_STEP_SUMMARY" || true
+      - name: Keep audit logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-logs
+          path: .sentinel/runs/*/audit
+          retention-days: 14

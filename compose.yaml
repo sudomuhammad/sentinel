@@ -1,0 +1,106 @@
+# One project per run (`docker compose -p sentinel-<run-id>`), created and torn down by the
+# orchestrator. RUN_DIR points at .sentinel/runs/<run-id>.
+#
+# Networks:
+#   sandbox  internal, no route out. The agent and the proxy only.
+#   egress   the proxy's way out. The attacker sits here to stand in for "the internet".
+#   open     the unprotected baseline: agent and attacker, no proxy in between.
+
+x-sandbox: &sandbox
+  build: ./sandbox
+  image: sentinel-sandbox:dev
+  profiles: [agent]
+  user: "${SANDBOX_UID:-1000}:${SANDBOX_GID:-1000}"
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  pids_limit: 512
+  mem_limit: 4g
+  tmpfs:
+    - /tmp:mode=1777
+    - /home/agent:mode=1777
+  volumes:
+    - ${RUN_DIR}/workspace:/workspace
+    - ./evals/scenarios:/scenarios:ro
+
+x-sandbox-env: &sandbox-env
+  # Placeholders. The proxy swaps in the real key; the sandbox never holds it.
+  ANTHROPIC_API_KEY: sentinel-placeholder
+  OPENAI_API_KEY: sentinel-placeholder
+  CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+  DISABLE_AUTOUPDATER: "1"
+  NPM_CONFIG_UPDATE_NOTIFIER: "false"
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: safe.directory
+  GIT_CONFIG_VALUE_0: "*"
+
+services:
+  proxy:
+    image: mitmproxy/mitmproxy:12.3.1
+    command:
+      - mitmdump
+      - --listen-port=8080
+      - --set=confdir=/ca
+      - --set=connection_strategy=lazy
+      - --set=termlog_verbosity=warn
+      - --set=flow_detail=0
+      - -s
+      - /app/sentinel/proxy_addon.py
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      PYTHONPATH: /app
+    volumes:
+      - ./src/sentinel:/app/sentinel:ro
+      - ${RUN_DIR}/ca/proxy:/ca
+      - ${RUN_DIR}/run.json:/etc/sentinel/run.json:ro
+      - ${RUN_DIR}/audit:/audit
+    networks: [sandbox, egress]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import socket; socket.create_connection(('127.0.0.1', 8080), 1)"]
+      interval: 1s
+      retries: 30
+
+  attacker:
+    image: python:3.12.15-slim-bookworm
+    command: ["python", "/srv/server.py"]
+    volumes:
+      - ./attacker:/srv:ro
+      - ${RUN_DIR}/attacker:/data
+    networks: [egress, open]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8080), 1)"]
+      interval: 1s
+      retries: 30
+
+  sandbox:
+    <<: *sandbox
+    networks: [sandbox]
+    volumes:
+      - ${RUN_DIR}/workspace:/workspace
+      - ./evals/scenarios:/scenarios:ro
+      # The per-run proxy CA replaces the system bundle: every connection goes through the proxy.
+      - ${RUN_DIR}/ca/sandbox/ca.pem:/etc/ssl/certs/ca-certificates.crt:ro
+    environment:
+      <<: *sandbox-env
+      HTTP_PROXY: http://proxy:8080
+      HTTPS_PROXY: http://proxy:8080
+      http_proxy: http://proxy:8080
+      https_proxy: http://proxy:8080
+      NODE_EXTRA_CA_CERTS: /etc/ssl/certs/ca-certificates.crt
+      SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
+      REQUESTS_CA_BUNDLE: /etc/ssl/certs/ca-certificates.crt
+      PIP_CERT: /etc/ssl/certs/ca-certificates.crt
+      NPM_CONFIG_IGNORE_SCRIPTS: "true"
+
+  sandbox-open:
+    <<: *sandbox
+    networks: [open]
+    environment:
+      <<: *sandbox-env
+
+networks:
+  sandbox:
+    internal: true
+  egress: {}
+  open: {}
