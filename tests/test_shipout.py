@@ -87,3 +87,10 @@ def test_agent_git_hooks_never_run_or_ship(repos):
     for root in (clean, workspace):
         assert not (root / "escaped").exists()
         assert not (root / "escaped-fsmonitor").exists()
+
+
+def test_dependency_change_needs_review(repos):
+    clean, workspace, scratch = repos
+    (workspace / "package.json").write_text('{"dependencies": {"lodahs": "^4.17.21"}}\n')
+    result = gate(clean, workspace, scratch)
+    assert any("dependency" in v for v in result.violations)

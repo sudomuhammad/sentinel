@@ -9,8 +9,10 @@ import copy
 import fnmatch
 import tomllib
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
+
+from sentinel.packages import normalise
 
 DEFAULT_POLICY = Path(__file__).resolve().parents[2] / "policy.toml"
 PROVIDERS = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}
@@ -25,6 +27,7 @@ class EgressRule:
     inject_env: str | None = None
     inject_prefix: str = ""
     scan_body: bool = True
+    provider: str | None = None  # set on model API rules; their responses are priced
 
     def allows(self, method: str, path: str) -> bool:
         path = path.split("?", 1)[0]
@@ -51,11 +54,18 @@ class Policy:
     max_budget_usd: float
     timeout_seconds: int
     max_requests: int
+    pricing: dict[str, tuple[float, float]]
     npm_registry: str
+    pypi_index: str
+    pypi_files: str
     min_package_age_days: int
+    npm_allow: tuple[str, ...]
+    pypi_allow: tuple[str, ...]
     branch_prefix: str
     max_changed_files: int
     deny_paths: tuple[str, ...]
+    allow_dependency_changes: bool
+    dependency_files: tuple[str, ...]
 
     @classmethod
     def load(cls, path: Path = DEFAULT_POLICY) -> Policy:
@@ -75,6 +85,7 @@ class Policy:
                 inject_env=r.get("inject", {}).get("env"),
                 inject_prefix=r.get("inject", {}).get("prefix", ""),
                 scan_body=r.get("scan_body", True),
+                provider=r.get("provider"),
             )
             for r in raw.get("egress", [])
             if r.get("provider") in (None, provider)  # only the active provider's API
@@ -91,11 +102,18 @@ class Policy:
             max_budget_usd=budget["max_budget_usd"],
             timeout_seconds=budget["timeout_seconds"],
             max_requests=budget["max_requests"],
+            pricing={model: tuple(price) for model, price in raw["pricing"].items()},
             npm_registry=packages["npm_registry"].lower(),
+            pypi_index=packages["pypi_index"].lower(),
+            pypi_files=packages["pypi_files"].lower(),
             min_package_age_days=packages["min_age_days"],
+            npm_allow=tuple(packages.get("npm_allow", ())),
+            pypi_allow=tuple(normalise(n) for n in packages.get("pypi_allow", ())),
             branch_prefix=shipout["branch_prefix"],
             max_changed_files=shipout["max_changed_files"],
             deny_paths=tuple(shipout["deny_paths"]),
+            allow_dependency_changes=shipout["allow_dependency_changes"],
+            dependency_files=tuple(shipout["dependency_files"]),
         )
 
     def with_provider(self, provider: str | None) -> Policy:
@@ -124,3 +142,7 @@ class Policy:
     def denied_path(self, path: str) -> str | None:
         """Return the deny pattern a changed file matches, if any."""
         return next((p for p in self.deny_paths if fnmatch.fnmatchcase(path, p)), None)
+
+    def is_dependency_file(self, path: str) -> bool:
+        name = PurePosixPath(path).name
+        return any(fnmatch.fnmatchcase(name, pattern) for pattern in self.dependency_files)

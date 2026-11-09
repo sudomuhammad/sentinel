@@ -45,6 +45,8 @@ def check(clean: Path, files: list[str], policy: Policy, canaries: list[str], sc
     for path in files:
         if pattern := policy.denied_path(path):
             violations.append(f"{path}: protected path ({pattern})")
+        elif policy.is_dependency_file(path) and not policy.allow_dependency_changes:
+            violations.append(f"{path}: dependency change needs a person to review it")
 
     for line in git(clean, "diff", "--cached", "--raw", "--no-renames").splitlines():
         meta, path = line.split("\t", 1)
