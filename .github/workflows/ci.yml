@@ -14,6 +14,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.9.28"  # reads the relative exclude-newer in pyproject.toml
       - run: uv sync --locked
       - run: make lint test
 
@@ -23,6 +25,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.9.28"  # reads the relative exclude-newer in pyproject.toml
       - run: uv sync --locked
       - run: make build
       - name: Run every attack with and without Sentinel

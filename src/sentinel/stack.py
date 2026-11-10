@@ -7,6 +7,7 @@ import subprocess
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import BinaryIO
 
 from sentinel import audit
 
@@ -59,7 +60,7 @@ class Stack:
         self,
         service: str,
         command: list[str],
-        log: Path,
+        out: BinaryIO,
         timeout: int,
         should_stop: Callable[[], str | None],
     ) -> tuple[int | None, str | None]:
@@ -70,18 +71,17 @@ class Stack:
         cmd += [service, *command]
 
         deadline = time.monotonic() + timeout
-        with log.open("wb") as out:
-            proc = subprocess.Popen(cmd, env=self.env, stdout=out, stderr=subprocess.STDOUT)
-            stopped = None
-            while proc.poll() is None:
-                stopped = should_stop() or (
-                    f"time budget of {timeout}s used up" if time.monotonic() > deadline else None
-                )
-                if stopped:
-                    subprocess.run(["docker", "kill", self.agent_name], capture_output=True)
-                    proc.wait()
-                    break
-                time.sleep(0.5)
+        proc = subprocess.Popen(cmd, env=self.env, stdout=out, stderr=subprocess.STDOUT)
+        stopped = None
+        while proc.poll() is None:
+            stopped = should_stop() or (
+                "time budget used up" if time.monotonic() > deadline else None
+            )
+            if stopped:
+                subprocess.run(["docker", "kill", self.agent_name], capture_output=True)
+                proc.wait()
+                break
+            time.sleep(0.5)
         return proc.returncode, stopped
 
     def build(self) -> None:

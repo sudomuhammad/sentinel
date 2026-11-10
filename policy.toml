@@ -9,11 +9,20 @@ provider = "openai"
 [agent.anthropic]
 model = "claude-opus-5-5"
 reader_model = "claude-opus-5-5"
+reviewer_model = "claude-opus-5-5"
 
 [agent.openai]
 # The reader only writes a short JSON summary, so it gets the cheapest model in [pricing].
+# The reviewer has to spot harmful code, so it gets a stronger one.
 model = "gpt-6-luna"
 reader_model = "gpt-5-nano"
+reviewer_model = "gpt-5-mini"
+
+[review]
+# A tool-less model reads each diff before the gate. It can approve, send feedback back to the
+# coder (up to max_rounds coder runs in all) or reject the run. Approval never skips the gate.
+enabled = true
+max_rounds = 2
 
 [budget]
 max_turns = 60

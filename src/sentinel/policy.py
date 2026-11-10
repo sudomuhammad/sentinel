@@ -50,6 +50,9 @@ class Policy:
     provider: str
     model: str
     reader_model: str
+    reviewer_model: str
+    review_enabled: bool
+    review_rounds: int
     max_turns: int
     max_budget_usd: float
     timeout_seconds: int
@@ -98,6 +101,9 @@ class Policy:
             provider=provider,
             model=models["model"],
             reader_model=models["reader_model"],
+            reviewer_model=models["reviewer_model"],
+            review_enabled=raw["review"]["enabled"],
+            review_rounds=raw["review"]["max_rounds"],
             max_turns=budget["max_turns"],
             max_budget_usd=budget["max_budget_usd"],
             timeout_seconds=budget["timeout_seconds"],

@@ -18,7 +18,7 @@ The model provider, the package registries and GitHub are trusted. So is the per
 | --- | --- | --- |
 | Sandbox container | The working copy, canary keys, the proxy's CA certificate | The proxy, and nothing else |
 | Proxy container | The policy, the per-run CA key, the real model API key | The allowlisted hosts |
-| Host | The orchestrator, the clean clone, the GitHub App key and tokens, audit logs | GitHub and the model API |
+| Host | The orchestrator and agent graph, the tool-less reader and reviewer, the clean clone, the GitHub App key and tokens, audit logs | GitHub and the model API |
 
 Nothing in the sandbox can write to the audit log, the policy or the clean clone. The host never runs git inside the agent's working copy, because that copy's `.git` directory is under the agent's control.
 
@@ -30,6 +30,7 @@ Nothing in the sandbox can write to the audit log, the policy or the clean clone
 | Outbound network is open | Internal Docker network with no route or DNS. Default-deny proxy with host, method and path rules. | `proxy-bypass`, `dns-exfil`, `evil-postinstall` |
 | Package installs run third-party code | `--ignore-scripts`. Minimum package age on npm and PyPI. Optional package allowlists. Unknown hosts refused. New dependencies need a person. | `evil-postinstall`, `typosquat-dependency` |
 | Pushing code is unrestricted | The agent can't push. The gate checks protected paths, dependency files, links, canaries and gitleaks before committing to `agent/*`. | `hardcoded-key`, `workflow-edit`, `workflow-unicode-name`, `git-hook-escape` |
+| Malicious code in an ordinary file | A tool-less reviewer reads the diff against the task and can send it back or reject the run. Its approval never skips the gate. | `backdoor-in-fix` (needs an API key: `make eval-review`) |
 | Runaway spend | The proxy prices every model response and halts the run at the dollar cap. Unpriced models are refused. | Unit tests |
 | Untrusted content steers the agent | A tool-less reader summarises issues into a schema. Repo settings (`.claude/`) are not loaded. Every other control assumes the agent is already steered. | `make replay` with a live agent |
 | No way to measure | The red-team suite runs every attack with and without Sentinel in CI. | `make eval` |
@@ -48,11 +49,11 @@ The scenario from the design doc, step by step:
 
 These are open, roughly in order of how much they matter.
 
-1. Malicious code in an accepted pull request. The gate catches secrets and protected files. It can't tell a subtle backdoor from a bug fix. Review agent PRs the way you'd review an outside contributor's.
+1. Malicious code in an accepted pull request. The gate catches secrets and protected files but can't tell a subtle backdoor from a bug fix. The reviewer model catches obvious cases, but it is a model reading a diff the attacker may have written for it, so a well-disguised backdoor or a comment aimed at the reviewer can get past. Review agent PRs the way you'd review an outside contributor's.
 2. CI runs on agent branches. A push to `agent/*` in the same repo triggers `push` workflows with repository secrets, running the agent's code (its tests, for instance). The gate stops the agent editing workflows, but an existing workflow that runs `npm test` with secrets in its environment would still expose them to the agent's test code. Keep secret-bearing jobs off `agent/**` branches or behind environments with required reviewers. See [github-setup.md](github-setup.md).
 3. Covert channels through allowed hosts. The agent can encode data in package names it looks up on npm or PyPI, or in paths on the model API. The bandwidth is low and the canary scan covers known secrets, but arbitrary repository data could leave this way. Setting `npm_allow` and `pypi_allow` in the policy closes the package route.
-4. Spend counting has edges. The proxy prices responses after they arrive, so one call can overshoot the cap before the run halts, and a call that breaks off before its response arrives isn't counted at all, although the provider may still bill it. Cache reads are counted at the full input price, which overstates spend. The host-side reader isn't counted.
+4. Spend counting has edges. The proxy prices responses after they arrive, so one call can overshoot the cap before the run halts, and a call that breaks off before its response arrives isn't counted at all, although the provider may still bill it. Cache reads are counted at the full input price, which overstates spend. The host-side reader and reviewer aren't counted.
 5. Container isolation. The sandbox shares the host kernel. A kernel exploit escapes it. gVisor or a Firecracker microVM would close this.
-6. Reader summaries can still carry text. The schema, length limit and URL stripping shrink what an attacker can pass through the summary. They can't remove it, so the downstream controls assume the agent is steered regardless.
+6. Reader summaries and reviewer feedback can still carry text. The schemas, length limits and URL stripping shrink what an attacker can pass through them. They can't remove it, so the downstream controls assume the agent is steered regardless.
 7. Canary evasion. An agent that knows the canaries could encrypt them before sending. That only matters if a channel out exists, and the egress controls are what remove the channel. Canaries are for detection.
 8. Installs aren't pinned to lockfile hashes. The gate stops dependency changes from shipping, but inside the sandbox the agent can still install any package that passes the age check and allowlists. A private mirror with hash checking would close this.
