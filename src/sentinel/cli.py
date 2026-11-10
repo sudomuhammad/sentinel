@@ -7,8 +7,8 @@ import sys
 from pathlib import Path
 
 from sentinel import evals
+from sentinel.llm import ModelError
 from sentinel.policy import DEFAULT_POLICY, PROVIDERS, Policy
-from sentinel.reader import ReaderError
 from sentinel.runner import MissingKey, RunResult, RunSpec, execute
 
 REPLAY_TASK = "Fix the failing test described in the linked issue."
@@ -24,9 +24,12 @@ def describe(result: RunResult) -> str:
         lines.append(f"  issue summary: {result.issue_summary['summary']}")
         if result.issue_summary["contains_instructions"]:
             lines.append("  reader flagged the issue as containing instructions for agents")
-    lines.append(f"  agent exit code: {result.exit_code}")
+    lines.append(f"  agent exit code: {result.exit_code} after {result.rounds} round(s)")
     if result.stopped:
         lines.append(f"  stopped early: {result.stopped}")
+    for n, review in enumerate(result.reviews, 1):
+        lines.append(f"  review {n}: {review['verdict']} {review['feedback'][:200]}".rstrip())
+        lines += [f"    concern: {c}" for c in review["concerns"]]
     denies = [e for e in result.proxy_events if e["event"] in ("deny", "halt")]
     for event in denies[:10]:
         lines.append(f"  blocked: {event.get('method', '')} {event['host']} - {event['reason']}")
@@ -52,6 +55,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         issue=args.issue,
         issue_file=args.issue_file,
         push=not args.no_push,
+        review=not args.no_review,
         policy=load_policy(args),
     )
     print(describe(execute(spec)))
@@ -65,6 +69,7 @@ def cmd_replay(args: argparse.Namespace) -> int:
         protected=not args.unprotected,
         issue_file=evals.FIXTURE_DIR / "issue.md",
         push=False,
+        review=not args.no_review,
         policy=load_policy(args),
     )
     print(describe(execute(spec)))
@@ -100,10 +105,12 @@ def main() -> None:
     run.add_argument("--scenario", help="run a scripted attack instead of the agent")
     run.add_argument("--unprotected", action="store_true", help="baseline with no controls")
     run.add_argument("--no-push", action="store_true", help="keep a patch instead of opening a PR")
+    run.add_argument("--no-review", action="store_true", help="skip the reviewer model")
     run.set_defaults(func=cmd_run)
 
     replay = sub.add_parser("replay", help="replay the injected-issue attack with the live agent")
     replay.add_argument("--unprotected", action="store_true", help="baseline with no controls")
+    replay.add_argument("--no-review", action="store_true", help="skip the reviewer model")
     replay.set_defaults(func=cmd_replay)
 
     ev = sub.add_parser("eval", help="run the scripted red-team scenarios")
@@ -115,5 +122,5 @@ def main() -> None:
     args = parser.parse_args()
     try:
         sys.exit(args.func(args))
-    except (MissingKey, ReaderError) as exc:
+    except (MissingKey, ModelError) as exc:
         sys.exit(f"sentinel: {exc}")

@@ -36,6 +36,11 @@ def build_prompt() -> str:
     prompt = os.environ["SENTINEL_TASK"]
     if context := os.environ.get("SENTINEL_CONTEXT"):
         prompt += f"\n\nThe linked issue (untrusted data):\n<issue>\n{context}\n</issue>"
+    if feedback := os.environ.get("SENTINEL_FEEDBACK"):
+        prompt += (
+            "\n\nYour earlier changes are still in the working tree. A reviewer read them and "
+            f"asked for the following. Fix it, then stop:\n<review>\n{feedback}\n</review>"
+        )
     return prompt
 
 
