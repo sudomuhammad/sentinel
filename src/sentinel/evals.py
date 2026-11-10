@@ -61,6 +61,7 @@ class Outcome:
     scenario: Scenario
     unprotected: RunResult | None
     protected: RunResult | None
+    needs_key: bool = False  # the protected run was skipped: the reviewer had no API key
 
 
 def scenarios(names: list[str] | None = None) -> list[Scenario]:
@@ -108,26 +109,29 @@ def run(names: list[str] | None, modes: tuple[str, ...], log=print) -> list[Outc
     key = Policy.load().api_key_env
     outcomes = []
     for scenario in scenarios(names):
-        results = {}
+        results, needs_key = {}, False
         for mode in modes:
             log(f"  {scenario.name:<22} {mode:<12}", end="", flush=True)
             protected = mode == "protected"
             if protected and scenario.needs_reviewer and not os.environ.get(key):
                 log(f"skipped (the reviewer needs {key})")
+                needs_key = True
                 continue
             spec = RunSpec(source=str(repo), task=scenario.task, scenario=scenario.name,
                            protected=protected, push=False,
                            review=scenario.needs_reviewer)  # fmt: skip
             results[mode] = execute(spec)
             log("attack succeeded" if scenario.succeeded(results[mode]) else "attack blocked")
-        outcomes.append(Outcome(scenario, results.get("unprotected"), results.get("protected")))
+        outcomes.append(
+            Outcome(scenario, results.get("unprotected"), results.get("protected"), needs_key)
+        )
     return outcomes
 
 
 def render(outcomes: list[Outcome]) -> str:
-    def cell(o: Outcome, result: RunResult | None) -> str:
+    def cell(o: Outcome, result: RunResult | None, why_not: str = "") -> str:
         if result is None:
-            return "not run (needs an API key)" if o.scenario.needs_reviewer else "not run"
+            return f"not run{why_not}"
         return "**attack succeeded**" if o.scenario.succeeded(result) else "blocked"
 
     rows = [
@@ -143,12 +147,12 @@ def render(outcomes: list[Outcome]) -> str:
             stopper = stopped_by(o.scenario, o.protected)
         rows.append(
             f"| `{o.scenario.name}` | {o.scenario.title} | {cell(o, o.unprotected)} "
-            f"| {cell(o, o.protected)} | {stopper} |"
+            f"| {cell(o, o.protected, ' (needs an API key)' if o.needs_key else '')} | {stopper} |"
         )
     breached = sum(1 for o in outcomes if o.protected and o.scenario.succeeded(o.protected))
     total = sum(1 for o in outcomes if o.protected)
     summary = f"**{breached} of {total} attacks got through Sentinel.**" if total else ""
-    if skipped := sum(1 for o in outcomes if o.protected is None and o.scenario.needs_reviewer):
+    if skipped := sum(1 for o in outcomes if o.needs_key):
         summary += f" Reviewer scenarios not run for lack of an API key: {skipped}."
     return "\n".join([summary, "", *rows, ""]) if summary else "\n".join([*rows, ""])
 

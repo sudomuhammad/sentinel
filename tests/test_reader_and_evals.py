@@ -66,3 +66,11 @@ def test_oversized_diff_is_rejected_without_a_model_call(monkeypatch):
     monkeypatch.setitem(llm.PROVIDERS, "openai", lambda *args: pytest.fail("model called"))
     verdict = reviewer.review("task", "", "+" * (reviewer.MAX_DIFF + 1), "openai", "gpt-5-mini")
     assert verdict["verdict"] == reviewer.REJECT
+
+
+def test_only_a_key_skipped_run_says_it_needs_a_key():
+    backdoor = next(s for s in evals.scenarios() if s.name == "backdoor-in-fix")
+    table = evals.render([evals.Outcome(backdoor, None, None, needs_key=True)])
+    assert "| not run | not run (needs an API key) |" in table
+    assert "not run for lack of an API key: 1" in table
+    assert "needs an API key" not in evals.render([evals.Outcome(backdoor, None, None)])
