@@ -1,13 +1,21 @@
-"""npm minimum-age policy: hide fresh versions so typosquats and hijacked releases can't land.
+"""Package controls: hide fresh releases and, optionally, anything not on an allowlist.
+
+Fresh releases are where typosquats and hijacked versions land, so npm versions and PyPI files
+younger than the minimum age are filtered out of registry metadata and their downloads refused.
 
 Standard library only: the proxy container imports this module as-is.
 """
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import unquote
+
+PYPI_JSON = "application/vnd.pypi.simple.v1+json"  # PEP 691, with upload times from PEP 700
+SDIST_SUFFIXES = (".tar.gz", ".tar.bz2", ".zip")
+METADATA_SUFFIX = ".metadata"  # PEP 658: pip fetches a wheel's metadata file before the wheel
 
 
 def cutoff(min_age_days: int, now: datetime | None = None) -> datetime:
@@ -20,6 +28,24 @@ def _parse(ts: str) -> datetime:
 
 def old_enough(published: str | None, limit: datetime) -> bool:
     return published is not None and _parse(published) <= limit
+
+
+def path_only(path: str) -> str:
+    """The decoded path of a request target, without its query string."""
+    return unquote(path.split("?", 1)[0])
+
+
+def allowed(name: str, allowlist: tuple[str, ...]) -> bool:
+    """An empty allowlist allows everything that passes the age check."""
+    return not allowlist or name in allowlist
+
+
+# npm ------------------------------------------------------------------------
+
+
+def npm_packument_name(path: str) -> str | None:
+    path = path_only(path).strip("/")
+    return path if path and "/-/" not in path and not path.endswith(".tgz") else None
 
 
 def filter_packument(doc: dict[str, Any], limit: datetime) -> dict[str, Any]:
@@ -35,7 +61,7 @@ def filter_packument(doc: dict[str, Any], limit: datetime) -> dict[str, Any]:
 
 def tarball_coordinates(path: str) -> tuple[str, str] | None:
     """'/@scope/pkg/-/pkg-1.2.3.tgz' -> ('@scope/pkg', '1.2.3')."""
-    path = unquote(path.split("?", 1)[0])
+    path = path_only(path)
     if "/-/" not in path or not path.endswith(".tgz"):
         return None
     name, filename = path.lstrip("/").split("/-/", 1)
@@ -45,6 +71,39 @@ def tarball_coordinates(path: str) -> tuple[str, str] | None:
     return name, filename[len(prefix) : -len(".tgz")]
 
 
-def is_packument(path: str) -> bool:
-    path = path.split("?", 1)[0]
-    return path not in ("", "/") and "/-/" not in path and not path.endswith(".tgz")
+# PyPI -----------------------------------------------------------------------
+
+
+def normalise(name: str) -> str:
+    """PEP 503 project name normalisation."""
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def pypi_index_project(path: str) -> str | None:
+    """'/simple/Some_Pkg/' -> 'some-pkg'."""
+    parts = path_only(path).strip("/").split("/")
+    return normalise(parts[1]) if len(parts) == 2 and parts[0] == "simple" else None
+
+
+def pypi_file_project(path: str) -> tuple[str, str] | None:
+    """'/packages/../requests-2.32.3-py3-none-any.whl' -> ('requests', filename).
+
+    A metadata file maps to the file it describes, so both pass or fail the same checks.
+    """
+    filename = path_only(path).rsplit("/", 1)[-1].removesuffix(METADATA_SUFFIX)
+    if filename.endswith(".whl"):
+        return normalise(filename.split("-", 1)[0]), filename
+    for suffix in SDIST_SUFFIXES:
+        if filename.endswith(suffix) and "-" in filename:
+            return normalise(filename[: -len(suffix)].rsplit("-", 1)[0]), filename
+    return None
+
+
+def upload_times(index: dict[str, Any]) -> dict[str, str]:
+    return {f["filename"]: f.get("upload-time") for f in index.get("files", [])}
+
+
+def filter_simple_index(index: dict[str, Any], limit: datetime) -> dict[str, Any]:
+    """Drop files uploaded after `limit`. Files without an upload time are dropped too."""
+    files = [f for f in index.get("files", []) if old_enough(f.get("upload-time"), limit)]
+    return {**index, "files": files}

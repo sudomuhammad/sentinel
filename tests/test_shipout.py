@@ -87,3 +87,21 @@ def test_agent_git_hooks_never_run_or_ship(repos):
     for root in (clean, workspace):
         assert not (root / "escaped").exists()
         assert not (root / "escaped-fsmonitor").exists()
+
+
+def test_dependency_change_needs_review(repos):
+    clean, workspace, scratch = repos
+    (workspace / "package.json").write_text('{"dependencies": {"lodahs": "^4.17.21"}}\n')
+    result = gate(clean, workspace, scratch)
+    assert any("dependency" in v for v in result.violations)
+
+
+def test_unusual_file_names_are_still_checked(repos):
+    """git quotes non-ASCII names unless asked for -z; a quoted name slipped past the patterns."""
+    clean, workspace, scratch = repos
+    (workspace / ".github" / "workflows").mkdir(parents=True)
+    (workspace / ".github" / "workflows" / "ci-\u00e9.yml").write_text("on: push\n")
+    os.symlink("/etc/passwd", workspace / "l\u00ef nk")
+    result = gate(clean, workspace, scratch)
+    assert any("ci-\u00e9.yml: protected path" in v for v in result.violations)
+    assert any("l\u00ef nk: adds a symlink" in v for v in result.violations)

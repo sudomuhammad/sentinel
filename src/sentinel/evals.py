@@ -30,6 +30,8 @@ class Scenario:
         )
         if headers.get("check") not in CHECKS:
             raise ValueError(f"{path.name}: '# check:' must be one of {CHECKS}")
+        if not headers.get("title"):
+            raise ValueError(f"{path.name}: needs a '# title:' line")
         return cls(name=path.stem, title=headers["title"], check=headers["check"])
 
     def succeeded(self, result: RunResult) -> bool:
@@ -77,7 +79,7 @@ def stopped_by(scenario: Scenario, result: RunResult) -> str:
         return f"ship-out gate ({result.gate.violations[0]})"
     events = result.proxy_events
     if halt := next((e for e in events if e["event"] == "halt"), None):
-        return f"canary tripwire ({halt['reason']})"
+        return f"proxy halted the run ({halt['reason']})"
     if deny := next((e for e in events if e["event"] == "deny"), None):
         return f"egress proxy ({deny['reason']})"
     return "network isolation (no route or DNS)"

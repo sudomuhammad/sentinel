@@ -98,5 +98,37 @@ def test_tarball_coordinates():
     assert coords("/@types/node/-/node-22.1.0.tgz") == ("@types/node", "22.1.0")
     assert coords("/@types%2fnode/-/node-22.1.0.tgz") == ("@types/node", "22.1.0")
     assert coords("/left-pad") is None
-    assert packages.is_packument("/@types%2fnode")
-    assert not packages.is_packument("/left-pad/-/left-pad-1.3.0.tgz")
+    assert packages.npm_packument_name("/@types%2fnode") == "@types/node"
+    assert packages.npm_packument_name("/left-pad/-/left-pad-1.3.0.tgz") is None
+
+
+def test_pypi_paths_and_age_filter():
+    assert packages.pypi_index_project("/simple/Some_Pkg/") == "some-pkg"
+    assert packages.pypi_index_project("/pypi/requests/json") is None
+    whl = "/packages/aa/bb/cc/Requests_OAuth-2.0.0-py3-none-any.whl"
+    assert packages.pypi_file_project(whl) == (
+        "requests-oauth",
+        "Requests_OAuth-2.0.0-py3-none-any.whl",
+    )
+    assert packages.pypi_file_project("/packages/x/foo-bar-1.0.tar.gz") == (
+        "foo-bar",
+        "foo-bar-1.0.tar.gz",
+    )
+    assert packages.pypi_file_project("/packages/x/README") is None
+    index = {
+        "files": [
+            {"filename": "a-1.0.tar.gz", "upload-time": "2026-01-01T00:00:00Z"},
+            {"filename": "a-2.0.tar.gz", "upload-time": "2026-11-08T00:00:00Z"},
+            {"filename": "a-0.1.tar.gz"},
+        ]
+    }
+    limit = packages.cutoff(7, now=datetime(2026, 11, 9, tzinfo=UTC))
+    kept = packages.filter_simple_index(index, limit)["files"]
+    assert [f["filename"] for f in kept] == ["a-1.0.tar.gz"]
+
+
+def test_dependency_files_are_recognised_by_name():
+    assert POLICY.is_dependency_file("package.json")
+    assert POLICY.is_dependency_file("services/api/requirements-dev.txt")
+    assert POLICY.is_dependency_file("uv.lock")
+    assert not POLICY.is_dependency_file("src/package_info.js")
