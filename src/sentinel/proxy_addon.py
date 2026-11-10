@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import functools
-import inspect
 import json
 import os
 import urllib.request
@@ -29,23 +28,13 @@ MODEL = "sentinel_model"  # flow.metadata key: the priced model of a model API c
 
 def fail_closed(hook):
     """mitmproxy forwards a flow when a hook raises. Turn any error into a block and a halt."""
-    if inspect.iscoroutinefunction(hook):
 
-        @functools.wraps(hook)
-        async def guarded(self, flow):
-            try:
-                await hook(self, flow)
-            except Exception as exc:
-                self._fail(flow, exc)
-
-    else:
-
-        @functools.wraps(hook)
-        def guarded(self, flow):
-            try:
-                hook(self, flow)
-            except Exception as exc:
-                self._fail(flow, exc)
+    @functools.wraps(hook)
+    async def guarded(self, flow):
+        try:
+            await hook(self, flow)
+        except Exception as exc:
+            self._fail(flow, exc)
 
     return guarded
 
@@ -57,7 +46,7 @@ class Sentinel:
         self.policy = Policy.from_dict(config["policy"])
         self.canaries: list[str] = list(config["canaries"].values())
         self.age_limit = packages.cutoff(self.policy.min_package_age_days)
-        self.publish_times: dict[str, dict[str, str]] = {}  # npm name or PyPI project -> times
+        self.publish_times: dict[tuple[str, str], dict[str, str]] = {}  # (host, name) -> times
         self.requests = 0
         self.spent_usd = 0.0
         self.halted: str | None = None
@@ -69,7 +58,7 @@ class Sentinel:
         audit.record(self.audit_log, "ready", rules=len(self.policy.egress))
 
     @fail_closed
-    def http_connect(self, flow: http.HTTPFlow) -> None:
+    async def http_connect(self, flow: http.HTTPFlow) -> None:
         """Refuse tunnels to unknown hosts before any TLS is set up."""
         host = flow.request.host
         if self.halted or not self.policy.knows_host(host):
@@ -106,7 +95,7 @@ class Sentinel:
         audit.record(self.audit_log, "allow", method=req.method, host=req.host, path=req.path[:300])
 
     @fail_closed
-    def response(self, flow: http.HTTPFlow) -> None:
+    async def response(self, flow: http.HTTPFlow) -> None:
         if MODEL in flow.metadata:
             return self._record_spend(flow)
         req, resp = flow.request, flow.response
@@ -114,13 +103,13 @@ class Sentinel:
             return
         if req.host == self.policy.npm_registry and packages.npm_packument_name(req.path):
             doc = json.loads(resp.get_text() or "")
-            self.publish_times[doc.get("name", "")] = doc.get("time", {})
+            self.publish_times[req.host, doc.get("name", "")] = doc.get("time", {})
             resp.set_text(json.dumps(packages.filter_packument(doc, self.age_limit)))
         elif req.host == self.policy.pypi_index and (
             project := packages.pypi_index_project(req.path)
         ):
             index = json.loads(resp.get_text() or "")
-            self.publish_times[project] = packages.upload_times(index)
+            self.publish_times[req.host, project] = packages.upload_times(index)
             resp.set_text(json.dumps(packages.filter_simple_index(index, self.age_limit)))
 
     # Spend -----------------------------------------------------------------
@@ -146,8 +135,7 @@ class Sentinel:
             output_tokens=output_tokens, total_usd=round(self.spent_usd, 6),
         )  # fmt: skip
         if self.spent_usd > self.policy.max_budget_usd and not self.halted:
-            self.halted = f"spend cap of ${self.policy.max_budget_usd} reached"
-            audit.record(self.audit_log, "halt", host=flow.request.host, reason=self.halted)
+            self._stop(flow, f"spend cap of ${self.policy.max_budget_usd} reached")
 
     # Packages --------------------------------------------------------------
 
@@ -181,9 +169,12 @@ class Sentinel:
         return None if packages.allowed(name, allowlist) else f"{name} is not on the allowlist"
 
     async def _too_new(self, name, key, url, extract, accept) -> str | None:
-        if name not in self.publish_times:
-            self.publish_times[name] = await asyncio.to_thread(self._fetch, url, extract, accept)
-        if packages.old_enough(self.publish_times[name].get(key), self.age_limit):
+        """Look the release up by the registry that owns `url`, fetching it once per run."""
+        cache_key = (url.split("/")[2], name)
+        if cache_key not in self.publish_times:
+            times = await asyncio.to_thread(self._fetch, url, extract, accept)
+            self.publish_times[cache_key] = times
+        if packages.old_enough(self.publish_times[cache_key].get(key), self.age_limit):
             return None
         return f"{name} {key} is newer than {self.policy.min_package_age_days} days"
 
@@ -226,9 +217,13 @@ class Sentinel:
         )
         audit.record(self.audit_log, "error", host=flow.request.host, error=repr(exc)[:300])
 
-    def _halt(self, flow: http.HTTPFlow, reason: str, **fields) -> None:
+    def _stop(self, flow: http.HTTPFlow, reason: str, **fields) -> None:
+        """Halt the run: the orchestrator sees the event and kills the sandbox."""
         self.halted = reason
         audit.record(self.audit_log, "halt", host=flow.request.host, reason=reason, **fields)
+
+    def _halt(self, flow: http.HTTPFlow, reason: str, **fields) -> None:
+        self._stop(flow, reason, **fields)
         self._deny(flow, f"run halted: {reason}")
 
 

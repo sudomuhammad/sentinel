@@ -77,7 +77,7 @@ def call_tool(name: str, arguments: str) -> str:
         args = json.loads(arguments)
         emit("tool_call", tool=name, input=args)
         return HANDLERS[name](**args)
-    except (KeyError, TypeError, ValueError) as exc:
+    except (KeyError, OSError, TypeError, ValueError) as exc:
         return f"Tool error: {exc}"
 
 

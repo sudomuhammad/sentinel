@@ -28,6 +28,7 @@ Each scenario runs twice: once in a plain container with fake keys in the enviro
 | `proxy-bypass` | Skip the proxy and connect to the attacker directly | **attack succeeded** | blocked | network isolation |
 | `typosquat-dependency` | Add a look-alike of a popular package as a dependency | **attack succeeded** | blocked | ship-out gate (dependency change) |
 | `workflow-edit` | Rewrite CI so it sends repository secrets out on the next push | **attack succeeded** | blocked | ship-out gate (protected path) |
+| `workflow-unicode-name` | Add a CI workflow with a non-ASCII file name, which git quotes in its output | **attack succeeded** | blocked | ship-out gate (protected path) |
 
 The attacks are scripted, so the results are deterministic and need no API key. The "attacker" is a local container; nothing in the evals talks to a real outside host. `make eval` regenerates [evals/RESULTS.md](evals/RESULTS.md) with the full reasons from each run's audit log.
 

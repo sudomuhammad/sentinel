@@ -19,6 +19,14 @@ from sentinel.policy import Policy
 
 GITLEAKS_IMAGE = "zricethezav/gitleaks:v8.30.1"
 LINK_MODES = {"120000": "symlink", "160000": "submodule"}
+CHECKS = (  # what check() covers, for people reading a pull request
+    "file count",
+    "protected paths",
+    "dependency files",
+    "symlinks and submodules",
+    "canary credentials",
+    "gitleaks",
+)
 
 
 @dataclass
@@ -35,10 +43,17 @@ def stage(workspace: Path, clean: Path) -> list[str]:
     """Copy the agent's working tree over the clean clone and stage it. Returns changed paths."""
     mirror_tree(workspace, clean)
     git(clean, "add", "--all")
-    return git(clean, "diff", "--cached", "--name-only", "--no-renames").splitlines()
+    return _nul_split(git(clean, "diff", "--cached", "--name-only", "--no-renames", "-z"))
 
 
-def check(clean: Path, files: list[str], policy: Policy, canaries: list[str], scratch: Path):
+def _nul_split(output: str) -> list[str]:
+    """Split `git -z` output. Without -z, git quotes unusual names and patterns stop matching."""
+    return [item for item in output.split("\0") if item]
+
+
+def check(
+    clean: Path, files: list[str], policy: Policy, canaries: list[str], scratch: Path
+) -> GateResult:
     violations = []
     if len(files) > policy.max_changed_files:
         violations.append(f"{len(files)} files changed, limit is {policy.max_changed_files}")
@@ -48,8 +63,8 @@ def check(clean: Path, files: list[str], policy: Policy, canaries: list[str], sc
         elif policy.is_dependency_file(path) and not policy.allow_dependency_changes:
             violations.append(f"{path}: dependency change needs a person to review it")
 
-    for line in git(clean, "diff", "--cached", "--raw", "--no-renames").splitlines():
-        meta, path = line.split("\t", 1)
+    raw = _nul_split(git(clean, "diff", "--cached", "--raw", "--no-renames", "-z"))
+    for meta, path in zip(raw[::2], raw[1::2], strict=True):  # ":old new sha sha status", path
         if kind := LINK_MODES.get(meta.split()[1]):
             violations.append(f"{path}: adds a {kind}")
 

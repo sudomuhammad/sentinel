@@ -15,6 +15,7 @@ from urllib.parse import unquote
 
 PYPI_JSON = "application/vnd.pypi.simple.v1+json"  # PEP 691, with upload times from PEP 700
 SDIST_SUFFIXES = (".tar.gz", ".tar.bz2", ".zip")
+METADATA_SUFFIX = ".metadata"  # PEP 658: pip fetches a wheel's metadata file before the wheel
 
 
 def cutoff(min_age_days: int, now: datetime | None = None) -> datetime:
@@ -29,6 +30,11 @@ def old_enough(published: str | None, limit: datetime) -> bool:
     return published is not None and _parse(published) <= limit
 
 
+def path_only(path: str) -> str:
+    """The decoded path of a request target, without its query string."""
+    return unquote(path.split("?", 1)[0])
+
+
 def allowed(name: str, allowlist: tuple[str, ...]) -> bool:
     """An empty allowlist allows everything that passes the age check."""
     return not allowlist or name in allowlist
@@ -38,7 +44,7 @@ def allowed(name: str, allowlist: tuple[str, ...]) -> bool:
 
 
 def npm_packument_name(path: str) -> str | None:
-    path = unquote(path.split("?", 1)[0]).strip("/")
+    path = path_only(path).strip("/")
     return path if path and "/-/" not in path and not path.endswith(".tgz") else None
 
 
@@ -55,7 +61,7 @@ def filter_packument(doc: dict[str, Any], limit: datetime) -> dict[str, Any]:
 
 def tarball_coordinates(path: str) -> tuple[str, str] | None:
     """'/@scope/pkg/-/pkg-1.2.3.tgz' -> ('@scope/pkg', '1.2.3')."""
-    path = unquote(path.split("?", 1)[0])
+    path = path_only(path)
     if "/-/" not in path or not path.endswith(".tgz"):
         return None
     name, filename = path.lstrip("/").split("/-/", 1)
@@ -75,13 +81,16 @@ def normalise(name: str) -> str:
 
 def pypi_index_project(path: str) -> str | None:
     """'/simple/Some_Pkg/' -> 'some-pkg'."""
-    parts = path.split("?", 1)[0].strip("/").split("/")
+    parts = path_only(path).strip("/").split("/")
     return normalise(parts[1]) if len(parts) == 2 and parts[0] == "simple" else None
 
 
 def pypi_file_project(path: str) -> tuple[str, str] | None:
-    """'/packages/../requests-2.32.3-py3-none-any.whl' -> ('requests', filename)."""
-    filename = unquote(path.split("?", 1)[0]).rsplit("/", 1)[-1]
+    """'/packages/../requests-2.32.3-py3-none-any.whl' -> ('requests', filename).
+
+    A metadata file maps to the file it describes, so both pass or fail the same checks.
+    """
+    filename = path_only(path).rsplit("/", 1)[-1].removesuffix(METADATA_SUFFIX)
     if filename.endswith(".whl"):
         return normalise(filename.split("-", 1)[0]), filename
     for suffix in SDIST_SUFFIXES:

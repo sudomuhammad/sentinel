@@ -15,7 +15,7 @@ COMPOSE_FILE = ROOT / "compose.yaml"
 
 
 class Stack:
-    def __init__(self, run_id: str, run_dir: Path, secrets: dict[str, str]):
+    def __init__(self, run_id: str, run_dir: Path, proxy_log: Path, secrets: dict[str, str]):
         self.project = f"sentinel-{run_id}"
         self.agent_name = f"{self.project}-agent"
         # Values reach containers by name (`-e NAME`) so they never appear in argv.
@@ -27,7 +27,7 @@ class Stack:
             "SANDBOX_GID": str(os.getgid()),
         }
         self.secret_names = sorted(secrets)
-        self.proxy_log = run_dir / "audit" / "proxy.jsonl"
+        self.proxy_log = proxy_log
         self.base = ["docker", "compose", "-p", self.project, "-f", str(COMPOSE_FILE)]
 
     def compose(self, *args: str, check: bool = True) -> subprocess.CompletedProcess:

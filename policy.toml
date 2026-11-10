@@ -11,8 +11,7 @@ model = "claude-opus-5-5"
 reader_model = "claude-opus-5-5"
 
 [agent.openai]
-# $ per 1M tokens, in/out: gpt-5-nano 0.05/0.40, gpt-6-luna 0.10/0.50, gpt-5-mini 0.25/2.00.
-# The reader only writes a short JSON summary, so it gets the cheapest.
+# The reader only writes a short JSON summary, so it gets the cheapest model in [pricing].
 model = "gpt-6-luna"
 reader_model = "gpt-5-nano"
 

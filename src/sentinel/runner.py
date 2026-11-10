@@ -175,7 +175,7 @@ def execute(spec: RunSpec) -> RunResult:
         halts = [e for e in audit.read(paths.proxy_log) if e["event"] == "halt"]
         return f"proxy halted the run: {halts[0]['reason']}" if halts else None
 
-    stack = Stack(paths.id, paths.root, agent_env)
+    stack = Stack(paths.id, paths.root, paths.proxy_log, agent_env)
     # The proxy only gets the key for the provider in use.
     stack.env.update({k: "" for k in PROVIDERS.values() if k != policy.api_key_env})
     stack.build()
@@ -229,13 +229,14 @@ def ship(
         return
 
     branch = f"{spec.policy.branch_prefix}{paths.id}"
-    shipout.commit(paths.clean, branch, f"agent: {spec.task[:60]}")
+    title = f"agent: {spec.task[:60]}"
+    shipout.commit(paths.clean, branch, title)
     result.shipped = True
     if token and spec.push:
         git(paths.clean, "push", "--quiet", "origin", f"HEAD:refs/heads/{branch}",
             env=github.git_auth_env(token))  # fmt: skip
         result.pr_url = github.open_pull_request(
-            spec.source, token, branch, base_branch, f"agent: {spec.task[:60]}", pr_body(result)
+            spec.source, token, branch, base_branch, title, pr_body(result)
         )
     else:
         patch = git(paths.clean, "format-patch", "-1", "--stdout")
@@ -248,6 +249,6 @@ def pr_body(result: RunResult) -> str:
     return (
         f"Opened by Sentinel run `{result.run_id}`.\n\n"
         f"Changed files:\n{files}\n\n"
-        "Checks passed: protected paths, symlinks and submodules, canary credentials, gitleaks.\n"
+        f"Checks passed: {', '.join(shipout.CHECKS)}.\n"
         "Review this like any change from an outside contributor."
     )

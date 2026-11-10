@@ -72,7 +72,10 @@ def _anthropic(issue: str, model: str) -> str:
     )
     if response.stop_reason == "refusal":
         raise ReaderError("the reader model declined to summarise this issue")
-    return next(block.text for block in response.content if block.type == "text")
+    text = next((block.text for block in response.content if block.type == "text"), "")
+    if not text:
+        raise ReaderError("the reader model returned no summary")
+    return text
 
 
 def _openai(issue: str, model: str) -> str:
@@ -105,4 +108,7 @@ def summarise(issue_text: str, provider: str, model: str) -> dict:
         raise ReaderError(
             f"the {provider} API refused the reader's request: {exc.message}"
         ) from exc
-    return sanitise(json.loads(raw))
+    try:
+        return sanitise(json.loads(raw))
+    except (ValueError, AttributeError) as exc:  # not JSON, or not a JSON object
+        raise ReaderError("the reader model returned a malformed summary") from exc

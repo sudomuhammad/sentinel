@@ -39,6 +39,17 @@ def send(addon, method="GET", host="attacker", path="/", content=b"", headers=()
     return flow
 
 
+def receive(addon, flow):
+    asyncio.run(addon.response(flow))
+    return flow
+
+
+def override(addon, section, **values):
+    """Swap in a policy with some values in one section changed."""
+    raw = addon.policy.raw
+    addon.policy = addon.policy.__class__.from_dict({**raw, section: {**raw[section], **values}})
+
+
 def events(addon):
     return [e["event"] for e in audit.read(addon.audit_log)]
 
@@ -94,7 +105,7 @@ def test_hook_errors_fail_closed(addon, monkeypatch):
 
 def test_connect_to_unknown_host_is_refused(addon):
     flow = tflow.tflow(req=tutils.treq(method=b"CONNECT", host="attacker", port=443, path=b""))
-    addon.http_connect(flow)
+    asyncio.run(addon.http_connect(flow))
     assert flow.response.status_code == 403
 
 
@@ -114,16 +125,14 @@ def test_model_without_a_price_is_refused(addon):
 
 
 def test_spend_cap_halts_the_run(addon):
-    addon.policy = addon.policy.__class__.from_dict(
-        {**addon.policy.raw, "budget": {**addon.policy.raw["budget"], "max_budget_usd": 0.01}}
-    )
+    override(addon, "budget", max_budget_usd=0.01)
     flow = send(addon, "POST", "api.anthropic.com", "/v1/messages", CLAUDE_CALL)
     stream = (
         'event: message_start\ndata: {"type":"message_start","message":{"usage":'
         '{"input_tokens":2000,"output_tokens":1}}}\n\n'
         'event: message_delta\ndata: {"type":"message_delta","usage":{"output_tokens":500}}\n\n'
     )
-    addon.response(respond(flow, stream, "text/event-stream"))
+    receive(addon, respond(flow, stream, "text/event-stream"))
     assert addon.spent_usd == spend.cost((4.0, 20.0), 2000, 500)  # $0.018
     assert addon.halted.startswith("spend cap")
     assert (
@@ -135,18 +144,15 @@ def test_spend_cap_halts_the_run(addon):
 @pytest.mark.parametrize("addon", ["openai"], indirect=True)
 def test_openai_usage_is_counted(addon):
     flow = send(addon, "POST", "api.openai.com", "/v1/responses", OPENAI_CALL)
-    addon.response(
-        respond(flow, json.dumps({"usage": {"input_tokens": 1000, "output_tokens": 100}}))
+    receive(
+        addon, respond(flow, json.dumps({"usage": {"input_tokens": 1000, "output_tokens": 100}}))
     )
     assert addon.spent_usd == spend.cost((0.10, 0.50), 1000, 100)
     assert not addon.halted
 
 
 def test_package_allowlists(addon):
-    addon.policy = addon.policy.__class__.from_dict(
-        {**addon.policy.raw, "packages": {**addon.policy.raw["packages"],
-                                          "npm_allow": ["left-pad"], "pypi_allow": ["Requests"]}}
-    )  # fmt: skip
+    override(addon, "packages", npm_allow=["left-pad"], pypi_allow=["requests"])
     assert send(addon, "GET", "registry.npmjs.org", "/left-pad").response is None
     assert send(addon, "GET", "registry.npmjs.org", "/lodahs").response.status_code == 403
     assert send(addon, "GET", "pypi.org", "/simple/requests/").response is None
@@ -160,7 +166,7 @@ def test_pypi_index_asks_for_dates_and_hides_fresh_files(addon):
         {"filename": "demo-1.0.tar.gz", "upload-time": "2020-01-01T00:00:00Z"},
         {"filename": "demo-9.0.tar.gz", "upload-time": "2999-01-01T00:00:00Z"},
     ]}  # fmt: skip
-    addon.response(respond(flow, json.dumps(index), "application/vnd.pypi.simple.v1+json"))
+    receive(addon, respond(flow, json.dumps(index), "application/vnd.pypi.simple.v1+json"))
     shown = [f["filename"] for f in json.loads(flow.response.get_text())["files"]]
     assert shown == ["demo-1.0.tar.gz"]
     assert (
@@ -169,3 +175,34 @@ def test_pypi_index_asks_for_dates_and_hides_fresh_files(addon):
     )
     fresh = send(addon, "GET", "files.pythonhosted.org", "/packages/a/b/demo-9.0.tar.gz")
     assert fresh.response.status_code == 403
+
+
+def test_pypi_metadata_file_follows_its_wheel(addon):
+    flow = send(addon, "GET", "pypi.org", "/simple/demo/")
+    index = {"name": "demo", "files": [
+        {"filename": "demo-1.0-py3-none-any.whl", "upload-time": "2020-01-01T00:00:00Z"},
+        {"filename": "demo-9.0-py3-none-any.whl", "upload-time": "2999-01-01T00:00:00Z"},
+    ]}  # fmt: skip
+    receive(addon, respond(flow, json.dumps(index), "application/vnd.pypi.simple.v1+json"))
+    files = "/packages/a/b/demo-{}-py3-none-any.whl.metadata"
+    assert send(addon, "GET", "files.pythonhosted.org", files.format("1.0")).response is None
+    assert (
+        send(addon, "GET", "files.pythonhosted.org", files.format("9.0")).response.status_code
+        == 403
+    )
+
+
+def test_same_name_on_npm_and_pypi_is_tracked_separately(addon):
+    packument = send(addon, "GET", "registry.npmjs.org", "/demo")
+    doc = {"name": "demo", "time": {"1.0.0": "2020-01-01T00:00:00Z"},
+           "versions": {"1.0.0": {}}, "dist-tags": {"latest": "1.0.0"}}  # fmt: skip
+    receive(addon, respond(packument, json.dumps(doc)))
+    index = send(addon, "GET", "pypi.org", "/simple/demo/")
+    files = [{"filename": "demo-1.0.tar.gz", "upload-time": "2020-01-01T00:00:00Z"}]
+    receive(
+        addon, respond(index, json.dumps({"files": files}), "application/vnd.pypi.simple.v1+json")
+    )
+    tarball = send(addon, "GET", "registry.npmjs.org", "/demo/-/demo-1.0.0.tgz")
+    sdist = send(addon, "GET", "files.pythonhosted.org", "/packages/a/b/demo-1.0.tar.gz")
+    assert tarball.response is None
+    assert sdist.response is None
