@@ -6,7 +6,7 @@ A secure harness for autonomous coding agents. The agent gets a shell and a repo
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/architecture-dark.png">
-  <img alt="The coding agent runs in a Docker sandbox. Every request goes through an egress proxy that allows only the model API in use (OpenAI or Claude), npm and PyPI, and adds the API key itself. Other hosts get a 403. The orchestrator copies the agent's working tree to a ship-out gate, which opens a pull request on an agent/* branch." src="docs/architecture.png">
+  <img alt="The coding agent runs in a Docker sandbox. Every request goes through an egress proxy that allows only the model API in use (OpenAI or Claude), npm and PyPI, adds the API key itself and enforces a dollar cap. Other hosts get a 403. On the host, a LangGraph agent graph runs a tool-less reader that turns the issue into a summary for the agent, and a tool-less reviewer that reads the diff and can send feedback back. Approved work goes to the ship-out gate, plain code, which opens a pull request on an agent/* branch." src="docs/architecture.png">
 </picture>
 
 ## Why
